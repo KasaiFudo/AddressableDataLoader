@@ -5,65 +5,59 @@ using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
 
-namespace MainAssets._Scripts.Utils
+
+public class AddressableDataLoader : IDisposable
 {
-    public class AddressableDataLoader : IDisposable
+    private readonly List<AsyncOperationHandle> _handles = new();
+
+    public async UniTask<T> LoadAsync<T>(string address)
     {
-        private readonly List<AsyncOperationHandle> _handles = new();
+        var locationHandle = Addressables.LoadResourceLocationsAsync(address);
+        await locationHandle.Task;
 
-        public async UniTask<T> LoadAsync<T>(string address)
+        if (locationHandle.Status != AsyncOperationStatus.Succeeded || locationHandle.Result.Count == 0)
         {
-            var locationHandle = Addressables.LoadResourceLocationsAsync(address);
-            await locationHandle.Task;
-
-            if (locationHandle.Status != AsyncOperationStatus.Succeeded || locationHandle.Result.Count == 0)
-            {
-                Addressables.Release(locationHandle);
-                Debug.LogWarning($"Failed to load Addressable at '{address}' of type {typeof(T).Name}");
-                return default;
-            }
-            
-            var loadHandle = Addressables.LoadAssetAsync<T>(address);
-            _handles.Add(loadHandle);
-            await loadHandle;
-
             Addressables.Release(locationHandle);
-
-            if (loadHandle.Status != AsyncOperationStatus.Succeeded)
-            {
-                Addressables.Release(loadHandle);
-                return default;
-            }
-
-            return loadHandle.Result;
+            Debug.LogWarning($"Failed to load Addressable at '{address}' of type {typeof(T).Name}");
+            return default;
         }
+        
+        var loadHandle = Addressables.LoadAssetAsync<T>(address);
+        _handles.Add(loadHandle);
+        await loadHandle;
 
-        public async UniTask<List<T>> LoadManyAsync<T>(IEnumerable<string> addresses)
+        Addressables.Release(locationHandle);
+
+        if (loadHandle.Status != AsyncOperationStatus.Succeeded)
         {
-            var tasks = new List<UniTask<T>>();
-
-            foreach (var address in addresses)
-                tasks.Add(LoadAsync<T>(address));
-            
-            var results = await UniTask.WhenAll(tasks);
-            
-            return new List<T>(results);
+            Addressables.Release(loadHandle);
+            return default;
         }
 
-        public void Dispose()
+        return loadHandle.Result;
+    }
+
+    public async UniTask<List<T>> LoadManyAsync<T>(IEnumerable<string> addresses)
+    {
+        var tasks = new List<UniTask<T>>();
+
+        foreach (var address in addresses)
+            tasks.Add(LoadAsync<T>(address));
+        
+        var results = await UniTask.WhenAll(tasks);
+        
+        return new List<T>(results);
+    }
+
+    public void Dispose()
+    {
+        foreach (var handle in _handles)
         {
-            ReleaseAll();
+            if (handle.IsValid())
+                Addressables.Release(handle);
         }
 
-        private void ReleaseAll()
-        {
-            foreach (var handle in _handles)
-            {
-                if (handle.IsValid())
-                    Addressables.Release(handle);
-            }
-
-            _handles.Clear();
-        }
+        _handles.Clear();
     }
 }
+
